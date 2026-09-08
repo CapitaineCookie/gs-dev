@@ -691,6 +691,9 @@
         <div style="display:flex;margin-top:6px;margin-bottom:6px;">
           <button data-opt="dragtoggle" style="flex:1;">drag: off</button>
         </div>
+        <div style="display:flex;margin-bottom:6px;">
+          <button data-opt="scaletoggle" style="flex:1;">seam scale fix: off</button>
+        </div>
         <div style="display:flex;">
           <button data-opt="reset" style="flex:1;">reset</button>
         </div>
@@ -712,11 +715,43 @@
     let rawZoom = map.getZoom();
     const dbgState = panel.querySelector('#dbg-state');
     const dragBtn = panel.querySelector('[data-opt="dragtoggle"]');
+    const scaleBtn = panel.querySelector('[data-opt="scaletoggle"]');
+    const mapEl = document.getElementById('map');
     function renderState() {
       const actual = map.getZoom();
       dbgState.textContent = `retina=${dbgOpts.detectRetina} snap=${dbgOpts.zoomSnap} z=${actual.toFixed(2)} (${rawZoom.toFixed(2)})`;
       dragBtn.textContent = `drag: ${map.dragging.enabled() ? 'on' : 'off'}`;
+      scaleBtn.textContent = `seam scale fix: ${containerScaleOn ? 'on' : 'off'}`;
     }
+
+    // Seam fix: append a tiny scale() to Leaflet's own transform on each tile
+    // container (rather than resizing individual tile <img>s) so tiles overlap
+    // uniformly at their shared borders instead of one tile bleeding into the next.
+    let containerScaleOn = false;
+    const SCALE_VAL = 'scale(1.0015)';
+    function processContainer(el) {
+      const has = el.style.transform.indexOf(SCALE_VAL) !== -1;
+      if (containerScaleOn && !has) {
+        el.style.transform = (el.style.transform || '') + ' ' + SCALE_VAL;
+      } else if (!containerScaleOn && has) {
+        el.style.transform = el.style.transform.replace(' ' + SCALE_VAL, '').replace(SCALE_VAL, '');
+      }
+    }
+    const containerScaleObserver = new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        if (m.type === 'attributes' && m.target.classList && m.target.classList.contains('leaflet-tile-container')) {
+          processContainer(m.target);
+        }
+        if (m.type === 'childList') {
+          m.addedNodes.forEach(n => {
+            if (n.nodeType !== 1) return;
+            if (n.classList && n.classList.contains('leaflet-tile-container')) processContainer(n);
+            if (n.querySelectorAll) n.querySelectorAll('.leaflet-tile-container').forEach(processContainer);
+          });
+        }
+      }
+    });
+    containerScaleObserver.observe(mapEl, { subtree: true, childList: true, attributes: true, attributeFilter: ['style'] });
     panel.addEventListener('click', (e) => {
       const opt = e.target.dataset.opt;
       if (!opt) return;
@@ -737,6 +772,11 @@
         if (map.dragging.enabled()) map.dragging.disable(); else map.dragging.enable();
       }
 
+      if (opt === 'scaletoggle') {
+        containerScaleOn = !containerScaleOn;
+        mapEl.querySelectorAll('.leaflet-tile-container').forEach(processContainer);
+      }
+
       if (opt === 'reset') {
         dbgOpts.detectRetina = false;
         dbgOpts.zoomSnap = 0;
@@ -746,6 +786,8 @@
         fitFrance();
         rawZoom = map.getZoom();
         if (map.dragging.enabled()) map.dragging.disable();
+        containerScaleOn = false;
+        mapEl.querySelectorAll('.leaflet-tile-container').forEach(processContainer);
       }
 
       renderState();
