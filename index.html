@@ -42,7 +42,8 @@
     header .subtitle { font-size: 0.78rem; color: #888; letter-spacing: 0.04em; }
 
     /* ── Map ── */
-    #map { flex: 1; width: 100%; position: relative; background: #1a1a2e; }
+    #map { flex: 1; width: 100%; position: relative; background: #1a1a2e; overflow: hidden; }
+    #map-inner { position: absolute; inset: 0; transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1); }
     .leaflet-container { background: #1a1a2e !important; }
     #map-cover {
       position: absolute; inset: 0; background: #1a1a2e; z-index: 1000; pointer-events: none;
@@ -122,6 +123,24 @@
     }
     #submit-btn:hover { background: #c73652; }
     #submit-btn:active { transform: scale(0.93); }
+
+    #zoom-btn {
+      display: none;
+      flex-shrink: 0;
+      width: 44px; height: 44px;
+      border-radius: 50%;
+      border: none;
+      background: #16213e;
+      color: #eee;
+      cursor: pointer;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+      transition: background 0.2s, transform 0.1s;
+      align-items: center; justify-content: center;
+      touch-action: none;
+    }
+    #zoom-btn.visible { display: flex; }
+    #zoom-btn:hover { background: #0f3460; }
+    #zoom-btn:active, #zoom-btn.zooming { transform: scale(0.93); background: #0f3460; }
 
     #suggestions {
       position: absolute;
@@ -434,7 +453,7 @@
   <div id="round-indicator"><div class="round-dot"></div><div class="round-dot"></div><div class="round-dot"></div><div class="round-dot"></div><div class="round-dot"></div></div>
 </header>
 
-<div id="map"><div id="map-cover"></div>
+<div id="map"><div id="map-inner"></div><div id="map-cover"></div>
   <!-- Score panel -->
   <div id="score-panel">
     <div class="panel-title" id="panel-round-label">Manche 1 / 5</div>
@@ -455,6 +474,7 @@
 
 <!-- Bottom bar: search or action button -->
 <div id="bottom-bar">
+  <button id="zoom-btn" title="Maintenir pour zoomer"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.2" y2="16.2"/><line x1="8" y1="11" x2="14" y2="11"/><line x1="11" y1="8" x2="11" y2="14"/></svg></button>
   <div id="search-wrapper">
     <input id="search-input" type="text" placeholder="Trouve une ville proche…" autocomplete="off" spellcheck="false" />
     <div id="suggestions" style="display:none"></div>
@@ -539,7 +559,7 @@
 <script src="landmarks.js"></script>
 <script>
   // ── Map ───────────────────────────────────────────────────────────────────
-  const map = L.map('map', {
+  const map = L.map('map-inner', {
     center: [46.6, 2.5], zoom: 6,
     zoomSnap: 0,
     zoomControl: false, dragging: false,
@@ -561,7 +581,7 @@
   // Snapshot full screen height once so keyboard open/close doesn't affect it on mobile
   const SCREEN_H = window.visualViewport ? window.visualViewport.height : window.innerHeight;
 
-  function fitLatitudes() {
+  function fitLatitudes(animate) {
     const mapEl = document.getElementById('map');
     const availH = mapEl.clientHeight - PAD_TOP - PAD_BOTTOM;
     const availW = mapEl.clientWidth - PAD_SIDES * 2;
@@ -588,13 +608,58 @@
     const zoomW = lo;
 
     // Use whichever axis is tighter
-    map.setView([centerLat, LNG_CENTER], Math.min(zoomH, zoomW), { animate: false });
+    map.setView([centerLat, LNG_CENTER], Math.min(zoomH, zoomW), { animate: !!animate });
   }
 
   const fitFrance = fitLatitudes;
 
+  // ── Hold-to-zoom on the current target ──────────────────────────────────
+  // Pure CSS transform on the map's own container — never touches Leaflet's
+  // zoom/pan, so no tiles are ever requested or swapped and there's nothing
+  // that can flicker. Trade-off: the view is a bit soft while held, since
+  // we're just magnifying already-rendered pixels rather than fetching
+  // sharper ones.
+  const ZOOM_SCALE = 2.4;
+  const mapInnerEl = document.getElementById('map-inner');
+  let isZoomedIn = false;
+
+  function zoomInOnTarget() {
+    if (isZoomedIn || guessedThisRound) return;
+    const target = targets[round];
+    if (!target) return;
+    const [tLng, tLat] = target.centre.coordinates;
+    isZoomedIn = true;
+    document.getElementById('zoom-btn').classList.add('zooming');
+    // Scale around the map's top-left, then translate so the target point
+    // (originally at pt) ends up centered on screen instead of just growing in place.
+    const pt = map.latLngToContainerPoint([tLat, tLng]);
+    const cx = mapInnerEl.clientWidth / 2;
+    const cy = mapInnerEl.clientHeight / 2;
+    const tx = cx - ZOOM_SCALE * pt.x;
+    const ty = cy - ZOOM_SCALE * pt.y;
+    mapInnerEl.style.transformOrigin = '0 0';
+    mapInnerEl.style.transform = 'translate(' + tx + 'px, ' + ty + 'px) scale(' + ZOOM_SCALE + ')';
+  }
+
+  function zoomOutFromTarget() {
+    if (!isZoomedIn) return;
+    isZoomedIn = false;
+    document.getElementById('zoom-btn').classList.remove('zooming');
+    mapInnerEl.style.transform = 'none';
+  }
+
+  const zoomBtn = document.getElementById('zoom-btn');
+  zoomBtn.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    zoomBtn.setPointerCapture(e.pointerId);
+    zoomInOnTarget();
+  });
+  zoomBtn.addEventListener('pointerup', zoomOutFromTarget);
+  zoomBtn.addEventListener('pointercancel', zoomOutFromTarget);
+  zoomBtn.addEventListener('lostpointercapture', zoomOutFromTarget);
+  zoomBtn.addEventListener('contextmenu', (e) => e.preventDefault());
+
   let suppressResize = false;
-  let dbgSuppressAutoFit = null; // set by debug panel to a fn() => boolean
   // ResizeObserver fires when #map has a real size — reliable on both desktop and mobile
   new ResizeObserver(() => {
     if (suppressResize) return;
@@ -603,8 +668,7 @@
     // On touch devices, skip when the keyboard is open (map height shrinks)
     if (isTouchDevice && mapEl.clientHeight < SCREEN_H * 0.5) return;
     map.invalidateSize({ animate: false });
-    if (dbgSuppressAutoFit && dbgSuppressAutoFit()) return;
-    fitFrance();
+    if (!isZoomedIn) fitFrance();
   }).observe(document.getElementById('map'));
 
   // Lift bottom bar + km display above the virtual keyboard on mobile
@@ -637,19 +701,14 @@
   map.getPane('lines').style.pointerEvents        = 'none';
   map.getPane('labels').style.pointerEvents       = 'none';
 
-  const TILE_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
-  let tileLayer = null;
+  const TILE_URL_TEMPLATE = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
 
-  function mountTileLayer(options) {
-    if (tileLayer) map.removeLayer(tileLayer);
-    tileLayer = L.tileLayer(TILE_URL, Object.assign({
-      attribution: '© <a href="https://www.esri.com">Esri</a>, Maxar, Earthstar Geographics',
-      maxZoom: 19,
-    }, options)).addTo(map);
-    return tileLayer;
-  }
-
-  mountTileLayer({}).once('load', () => {
+  const satelliteLayer = L.tileLayer(TILE_URL_TEMPLATE, {
+    attribution: '© <a href="https://www.esri.com">Esri</a>, Maxar, Earthstar Geographics',
+    maxZoom: 19,
+    detectRetina: true,
+    keepBuffer: 1,
+  }).once('load', () => {
     const cover = document.getElementById('map-cover');
     if (cover) {
       cover.classList.add('hidden');
@@ -660,129 +719,7 @@
       btn.disabled = false;
       btn.innerHTML = 'Jouer';
     }
-  });
-
-  // ── Debug panel: test tile-quality options live (?debug=1) ─────────────────
-  if (new URLSearchParams(location.search).has('debug')) {
-    const panel = document.createElement('div');
-    panel.id = 'debug-panel';
-    panel.style.cssText = 'position:fixed;top:8px;left:8px;z-index:9999;background:rgba(0,0,0,0.75);' +
-      'color:#fff;padding:8px;border-radius:6px;font:11px/1.4 monospace;max-width:260px;';
-    panel.innerHTML = `
-      <div id="dbg-title" style="margin-bottom:4px;font-weight:bold;cursor:pointer;user-select:none;">▾ Tile debug</div>
-      <div id="dbg-body">
-        <div id="dbg-state" style="margin-bottom:6px;opacity:0.8;"></div>
-        <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px;">
-          <button data-opt="retina0">retina off</button>
-          <button data-opt="retina1">retina on</button>
-        </div>
-        <div style="display:flex;gap:4px;margin-bottom:6px;">
-          <button data-opt="snap0">snap 0</button>
-          <button data-opt="snap025">snap .25</button>
-          <button data-opt="snap1">snap 1</button>
-        </div>
-        <div style="display:flex;flex-wrap:wrap;gap:4px;">
-          <button data-opt="zoomdown10">-1</button>
-          <button data-opt="zoomdown">-0.1</button>
-          <button data-opt="zoomup">+0.1</button>
-          <button data-opt="zoomup10">+1</button>
-          <button data-opt="zoomauto">auto-fit</button>
-        </div>
-        <div style="display:flex;margin-top:6px;margin-bottom:6px;">
-          <button data-opt="dragtoggle" style="flex:1;">drag: off</button>
-        </div>
-        <div style="display:flex;margin-bottom:6px;">
-          <button data-opt="scaletoggle" style="flex:1;">seam scale fix: off</button>
-        </div>
-        <div style="display:flex;">
-          <button data-opt="reset" style="flex:1;">reset</button>
-        </div>
-      </div>`;
-    document.body.appendChild(panel);
-
-    const dbgTitle = panel.querySelector('#dbg-title');
-    const dbgBody = panel.querySelector('#dbg-body');
-    dbgTitle.addEventListener('click', () => {
-      const collapsed = dbgBody.style.display === 'none';
-      dbgBody.style.display = collapsed ? '' : 'none';
-      dbgTitle.textContent = (collapsed ? '▾' : '▸') + ' Tile debug';
-    });
-
-    let dbgOpts = { detectRetina: false, zoomSnap: 0 };
-    let manualZoom = false; // once true, ResizeObserver's fitFrance() is skipped
-    // Leaflet snaps setZoom() to the nearest zoomSnap multiple, so we track the
-    // "requested" zoom separately from the actual snapped zoom Leaflet renders at.
-    let rawZoom = map.getZoom();
-    const dbgState = panel.querySelector('#dbg-state');
-    const dragBtn = panel.querySelector('[data-opt="dragtoggle"]');
-    const scaleBtn = panel.querySelector('[data-opt="scaletoggle"]');
-    const mapEl = document.getElementById('map');
-    function renderState() {
-      const actual = map.getZoom();
-      dbgState.textContent = `retina=${dbgOpts.detectRetina} snap=${dbgOpts.zoomSnap} z=${actual.toFixed(2)} (${rawZoom.toFixed(2)})`;
-      dragBtn.textContent = `drag: ${map.dragging.enabled() ? 'on' : 'off'}`;
-      scaleBtn.textContent = `seam fix: ${containerScaleOn ? 'on' : 'off'}`;
-    }
-
-    // Seam fix: grow each tile <img> symmetrically (equal negative margin on all
-    // sides) so it overlaps its neighbors evenly on every edge, instead of only
-    // bleeding into the bottom-right neighbor like the earlier top-left-anchored attempt.
-    let containerScaleOn = false;
-    const seamStyle = document.createElement('style');
-    seamStyle.textContent = `
-      .seam-fix .leaflet-tile-container img {
-        width: 257px !important;
-        height: 257px !important;
-        margin: -0.5px !important;
-      }`;
-    document.head.appendChild(seamStyle);
-    panel.addEventListener('click', (e) => {
-      const opt = e.target.dataset.opt;
-      if (!opt) return;
-
-      if (opt === 'retina0') { dbgOpts.detectRetina = false; mountTileLayer({ detectRetina: false }); }
-      if (opt === 'retina1') { dbgOpts.detectRetina = true; mountTileLayer({ detectRetina: true }); }
-      if (opt === 'snap0') { dbgOpts.zoomSnap = 0; map.options.zoomSnap = 0; map.setZoom(rawZoom); }
-      if (opt === 'snap025') { dbgOpts.zoomSnap = 0.25; map.options.zoomSnap = 0.25; map.setZoom(rawZoom); }
-      if (opt === 'snap1') { dbgOpts.zoomSnap = 1; map.options.zoomSnap = 1; map.setZoom(rawZoom); }
-
-      if (opt === 'zoomdown10') { manualZoom = true; rawZoom -= 1; map.setZoom(rawZoom); }
-      if (opt === 'zoomdown')   { manualZoom = true; rawZoom -= 0.1; map.setZoom(rawZoom); }
-      if (opt === 'zoomup')     { manualZoom = true; rawZoom += 0.1; map.setZoom(rawZoom); }
-      if (opt === 'zoomup10')   { manualZoom = true; rawZoom += 1; map.setZoom(rawZoom); }
-      if (opt === 'zoomauto')   { manualZoom = false; fitFrance(); rawZoom = map.getZoom(); }
-
-      if (opt === 'dragtoggle') {
-        if (map.dragging.enabled()) map.dragging.disable(); else map.dragging.enable();
-      }
-
-      if (opt === 'scaletoggle') {
-        containerScaleOn = !containerScaleOn;
-        mapEl.classList.toggle('seam-fix', containerScaleOn);
-      }
-
-      if (opt === 'reset') {
-        dbgOpts.detectRetina = false;
-        dbgOpts.zoomSnap = 0;
-        manualZoom = false;
-        map.options.zoomSnap = 0;
-        mountTileLayer({ detectRetina: false });
-        fitFrance();
-        rawZoom = map.getZoom();
-        if (map.dragging.enabled()) map.dragging.disable();
-        containerScaleOn = false;
-        mapEl.classList.remove('seam-fix');
-      }
-
-      renderState();
-    });
-    dbgSuppressAutoFit = () => manualZoom;
-    map.on('zoomend', () => {
-      if (!manualZoom) rawZoom = map.getZoom();
-      renderState();
-    });
-    renderState();
-  }
+  }).addTo(map);
 
   // Rivers + Border deferred so the overlay paints immediately
   setTimeout(() => {
@@ -1078,6 +1015,7 @@
     // Show search, hide button
     document.getElementById('search-wrapper').style.display = 'block';
     document.getElementById('submit-btn').style.display = 'flex';
+    document.getElementById('zoom-btn').classList.add('visible');
     document.getElementById('search-input').value = '';
     document.getElementById('action-btn').style.display = 'none';
     if (!('ontouchstart' in window)) document.getElementById('search-input').focus();
@@ -1164,6 +1102,8 @@
   function showActionBtn() {
     document.getElementById('search-wrapper').style.display = 'none';
     document.getElementById('submit-btn').style.display = 'none';
+    document.getElementById('zoom-btn').classList.remove('visible');
+    zoomOutFromTarget();
     const btn = document.getElementById('action-btn');
     btn.style.display = 'block';
     btn.textContent = round < TOTAL_ROUNDS - 1 ? 'Suivant →' : 'Résultats';
@@ -1811,6 +1751,8 @@
     input.value = '';
     document.getElementById('search-wrapper').style.display = 'none';
     document.getElementById('submit-btn').style.display = 'none';
+    document.getElementById('zoom-btn').classList.remove('visible');
+    zoomOutFromTarget();
   }
 
   function updateActive(items) {
