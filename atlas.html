@@ -43,8 +43,6 @@
     /* ── Map ── */
     #map { flex: 1; width: 100%; position: relative; background: #1a1a2e; }
     .leaflet-container { background: #1a1a2e !important; }
-    #map-fit { position: absolute; inset: 0; transform-origin: 50% 50%; }
-    #map-leaflet { position: absolute; inset: 0; }
     .leaflet-interactive { transition: r 0.15s ease, d 0.15s ease; }
 
     /* ── Bottom bar ── */
@@ -214,7 +212,6 @@
 </header>
 
 <div id="map">
-  <div id="map-fit"><div id="map-leaflet"></div></div>
   <div id="settings-panel">
     <div class="panel-title" id="settings-toggle">Options</div>
     <div id="settings-body">
@@ -245,13 +242,12 @@
 <script src="cities.js"></script>
 <script>
   // ── Map ───────────────────────────────────────────────────────────────────
-  const map = L.map('map-leaflet', {
+  const map = L.map('map', {
     center: [46.6, 2.5], zoom: 6,
     zoomSnap: 0,
     zoomControl: false, dragging: false,
     scrollWheelZoom: false, doubleClickZoom: false,
     touchZoom: false, boxZoom: false, keyboard: false,
-    fadeAnimation: false,
   });
 
   const LAT_SOUTH = 41.2;
@@ -290,11 +286,7 @@
     }
     const zoomW = lo;
 
-    const zoom = Math.min(zoomH, zoomW);
-    const flooredZoom = Math.floor(zoom);
-    const extraScale = Math.pow(2, zoom - flooredZoom);
-    map.setView([centerLat, LNG_CENTER], flooredZoom, { animate: false });
-    document.getElementById('map-fit').style.transform = 'scale(' + extraScale + ')';
+    map.setView([centerLat, LNG_CENTER], Math.min(zoomH, zoomW), { animate: false });
   }
 
   fitLatitudes();
