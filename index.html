@@ -143,6 +143,27 @@
     #zoom-btn:hover { background: #0f3460; }
     #zoom-btn:active, #zoom-btn.zooming { transform: scale(0.93); background: #0f3460; }
 
+    #zoom-debug-btn {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      z-index: 950;
+      padding: 6px 10px;
+      border-radius: 8px;
+      border: 1px solid #0f3460;
+      background: rgba(22, 33, 62, 0.92);
+      color: #eee;
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      cursor: pointer;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+      transition: background 0.2s;
+    }
+    #zoom-debug-btn:hover { background: #0f3460; }
+    #zoom-debug-btn.leaflet-mode { border-color: #e94560; color: #e94560; }
+
     #suggestions {
       position: absolute;
       bottom: calc(100% + 6px);
@@ -455,6 +476,7 @@
 </header>
 
 <div id="map"><div id="map-inner"></div><div id="map-cover"></div>
+  <button id="zoom-debug-btn" class="leaflet-mode" title="Basculer le mode de zoom (debug)">LEAFLET ZOOM</button>
   <!-- Score panel -->
   <div id="score-panel">
     <div class="panel-title" id="panel-round-label">Manche 1 / 5</div>
@@ -621,11 +643,16 @@
   // we're just magnifying already-rendered pixels rather than fetching
   // sharper ones.
   const ZOOM_SCALE = 2.4;
+  // Debug switch: false = CSS transform scale (blurry), true = Leaflet's own zoomAround (sharp tiles/vectors)
+  let useLeafletZoom = true;
+  const LEAFLET_ZOOM_DELTA = Math.log2(ZOOM_SCALE) + 1; // extra zoom-level jump beyond the CSS-scale equivalent
   const TARGET_DOT_RADIUS = 6; // matches makeMarker's default radius
   const TARGET_DOT_WEIGHT = 2; // matches makeMarker's default weight
   const RIVER_WEIGHT = 1.2; // matches rivers layer's default weight
   const mapInnerEl = document.getElementById('map-inner');
   let isZoomedIn = false;
+  let baseZoomLevel = null; // Leaflet-mode: zoom level to restore on zoom-out
+  let baseCenter = null; // Leaflet-mode: center to restore on zoom-out
 
   function zoomInOnTarget() {
     if (isZoomedIn || guessedThisRound) return;
@@ -633,8 +660,16 @@
     if (!target) return;
     const [tLng, tLat] = target.centre.coordinates;
     isZoomedIn = true;
-    document.getElementById('map').style.setProperty('--zoom-duration', '0.75s');
     document.getElementById('zoom-btn').classList.add('zooming');
+
+    if (useLeafletZoom) {
+      baseZoomLevel = map.getZoom();
+      baseCenter = map.getCenter();
+      map.setView([tLat, tLng], baseZoomLevel + LEAFLET_ZOOM_DELTA, { animate: true, duration: 0.75 });
+      return;
+    }
+
+    document.getElementById('map').style.setProperty('--zoom-duration', '0.75s');
     // Scale around the map's top-left, then translate so the target point
     // (originally at pt) ends up centered on screen instead of just growing in place.
     const pt = map.latLngToContainerPoint([tLat, tLng]);
@@ -652,14 +687,30 @@
 
   function zoomOutFromTarget() {
     if (!isZoomedIn) return;
+    isZoomedIn = false;
+    document.getElementById('zoom-btn').classList.remove('zooming');
+
+    if (useLeafletZoom) {
+      if (baseZoomLevel != null) map.setView(baseCenter, baseZoomLevel, { animate: true, duration: 0.45 });
+      baseZoomLevel = null;
+      baseCenter = null;
+      return;
+    }
+
     if (targetMarker) targetMarker.setStyle({ radius: TARGET_DOT_RADIUS, weight: TARGET_DOT_WEIGHT });
     if (riversLayer) riversLayer.setStyle({ weight: RIVER_WEIGHT });
     borderLayers.forEach((layer, i) => layer.setStyle({ weight: BORDER_WEIGHTS[i] }));
-    isZoomedIn = false;
     document.getElementById('map').style.setProperty('--zoom-duration', '0.45s');
-    document.getElementById('zoom-btn').classList.remove('zooming');
     mapInnerEl.style.transform = 'none';
   }
+
+  const zoomDebugBtn = document.getElementById('zoom-debug-btn');
+  zoomDebugBtn.addEventListener('click', () => {
+    if (isZoomedIn) zoomOutFromTarget();
+    useLeafletZoom = !useLeafletZoom;
+    zoomDebugBtn.textContent = useLeafletZoom ? 'LEAFLET ZOOM' : 'CSS ZOOM';
+    zoomDebugBtn.classList.toggle('leaflet-mode', useLeafletZoom);
+  });
 
   const zoomBtn = document.getElementById('zoom-btn');
   zoomBtn.addEventListener('pointerdown', (e) => {
