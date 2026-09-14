@@ -43,6 +43,7 @@
 
     /* ── Map ── */
     #map { flex: 1; width: 100%; position: relative; background: #1a1a2e; overflow: hidden; --zoom-duration: 0.45s; }
+    #map-fit { position: absolute; inset: 0; transform-origin: 50% 50%; }
     #map-inner { position: absolute; inset: 0; transition: transform var(--zoom-duration) cubic-bezier(0.22, 1, 0.36, 1); }
     .leaflet-container { background: #1a1a2e !important; }
     #map-cover {
@@ -454,7 +455,7 @@
   <div id="round-indicator"><div class="round-dot"></div><div class="round-dot"></div><div class="round-dot"></div><div class="round-dot"></div><div class="round-dot"></div></div>
 </header>
 
-<div id="map"><div id="map-inner"></div><div id="map-cover"></div>
+<div id="map"><div id="map-fit"><div id="map-inner"></div></div><div id="map-cover"></div>
   <!-- Score panel -->
   <div id="score-panel">
     <div class="panel-title" id="panel-round-label">Manche 1 / 5</div>
@@ -610,7 +611,16 @@
     const zoomW = lo;
 
     // Use whichever axis is tighter
-    map.setView([centerLat, LNG_CENTER], Math.min(zoomH, zoomW), { animate: !!animate });
+    const zoom = Math.min(zoomH, zoomW);
+    // Snap Leaflet itself to an integer zoom so tiles render crisp (no internal
+    // CSS scaling of the tile layer, which causes seams between tiles that shift
+    // with viewport size). Make up the remaining fractional zoom with a CSS
+    // scale on the #map-fit wrapper instead — that scales already-rendered
+    // pixels uniformly and doesn't introduce tile-edge rounding artifacts.
+    const flooredZoom = Math.floor(zoom);
+    const extraScale = Math.pow(2, zoom - flooredZoom);
+    map.setView([centerLat, LNG_CENTER], flooredZoom, { animate: !!animate });
+    document.getElementById('map-fit').style.transform = 'scale(' + extraScale + ')';
   }
 
   const fitFrance = fitLatitudes;
