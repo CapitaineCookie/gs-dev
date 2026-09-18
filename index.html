@@ -43,6 +43,10 @@
 
     /* ── Map ── */
     #map { flex: 1; width: 100%; position: relative; background: #1a1a2e; overflow: hidden; --zoom-duration: 0.45s; }
+    /* Always sitting behind #map-inner, permanently pinned to the base France view so it's
+       already fully loaded whenever the foreground map's own base-zoom tiles are still
+       fading in (e.g. right after zooming back out) — no black gaps underneath. */
+    #map-base { position: absolute; inset: 0; }
     #map-inner { position: absolute; inset: 0; transition: transform var(--zoom-duration) cubic-bezier(0.22, 1, 0.36, 1); }
     .leaflet-container { background: #1a1a2e !important; }
     #map-cover {
@@ -480,7 +484,7 @@
 </header>
 
 <div id="prefetch-map"></div>
-<div id="map"><div id="map-inner"></div><div id="map-cover"></div>
+<div id="map"><div id="map-base"></div><div id="map-inner"></div><div id="map-cover"></div>
   <button id="zoom-debug-btn" class="leaflet-mode" title="Basculer le mode de zoom (debug)">LEAFLET ZOOM</button>
   <!-- Score panel -->
   <div id="score-panel">
@@ -580,6 +584,7 @@
   }
 </script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="leaflet.edgebuffer.js"></script>
 <script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
 <script src="borders.js"></script>
 <script src="rivers.js"></script>
@@ -643,6 +648,22 @@
     baseCenterLatLng = L.latLng(centerLat, LNG_CENTER);
     syncPrefetchMapSize();
     prefetchView(baseCenterLatLng, baseZoom);
+    syncBaseMap();
+  }
+
+  // Permanently-loaded map pinned to the base France view, sitting behind #map-inner.
+  // The foreground map's own tiles for that same view fade in on top of it, so any gap
+  // while they're still loading reveals correct imagery instead of the dark background.
+  const baseMap = L.map('map-base', {
+    zoomSnap: 0, zoomControl: false, attributionControl: false,
+    dragging: false, scrollWheelZoom: false, doubleClickZoom: false,
+    touchZoom: false, boxZoom: false, keyboard: false,
+    fadeAnimation: false, zoomAnimation: false,
+  });
+  function syncBaseMap() {
+    if (baseCenterLatLng == null) return;
+    baseMap.invalidateSize({ animate: false });
+    baseMap.setView(baseCenterLatLng, baseZoom, { animate: false });
   }
 
   const fitFrance = fitLatitudes;
@@ -670,24 +691,6 @@
   }
   function unlockZoomBtn() {
     document.getElementById('zoom-btn').disabled = false;
-  }
-  // GridLayer only ever loads tiles covering the container's real on-screen
-  // size. While zoomed in, that leaves nothing loaded beyond the crop, so
-  // the zoom-out animation (which just CSS-scales down whatever tiles are
-  // currently loaded) has nothing to reveal at the edges. Trick the layer
-  // into thinking the container is `padFactor` times bigger for one update
-  // pass so it loads a wider tile area than the visible crop; those extra
-  // tiles sit clipped by #map's overflow:hidden until the zoom-out
-  // animation shrinks the pane back down and reveals them.
-  function padTileLoadArea(padFactor) {
-    const realSize = map.getSize();
-    const paddedSize = realSize.multiplyBy(padFactor);
-    map.getSize = () => paddedSize;
-    try {
-      satelliteLayer._update(map.getCenter());
-    } finally {
-      delete map.getSize;
-    }
   }
   // Force a marker's underlying SVG <path> to be torn down and recreated
   // from scratch. A brand-new element has no prior 'd'/position for the
@@ -723,7 +726,6 @@
           targetMarker.setStyle({ opacity: 1, fillOpacity: 1 });
           popMarker(targetMarker, 9, 6);
         }
-        padTileLoadArea(ZOOM_SCALE);
         unlockZoomBtn();
       });
       map.setView([tLat, tLng], baseZoomLevel + LEAFLET_ZOOM_DELTA, { animate: true, duration: 0.75 });
@@ -851,6 +853,11 @@
     maxZoom: 19,
     detectRetina: true,
     keepBuffer: 4,
+    // Keeps this many extra tiles loaded beyond the viewport at all times (via the
+    // Leaflet.EdgeBuffer patch), so that after zooming in on a target and shrinking
+    // back out by ~ZOOM_SCALE, the loaded area's own edge stays off-screen instead
+    // of showing as a seam.
+    edgeBufferTiles: 6,
   }).once('load', () => {
     const cover = document.getElementById('map-cover');
     if (cover) {
@@ -863,6 +870,8 @@
       btn.innerHTML = 'Jouer';
     }
   }).addTo(map);
+
+  L.tileLayer(TILE_URL_TEMPLATE, { maxZoom: 19, detectRetina: true, keepBuffer: 2 }).addTo(baseMap);
 
   // ── Tile prefetching ─────────────────────────────────────────────────────
   // The game only ever shows two views per round: the base France view and
