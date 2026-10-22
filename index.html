@@ -58,17 +58,27 @@
       opacity: 0.01; pointer-events: none; background: #1a1a2e;
       will-change: opacity; transform: translateZ(0);
     }
+    #map-zoom { transition: opacity 0.3s ease; }
+    #map-zoom.instant { transition: none; }
     #map-zoom.active { opacity: 1; pointer-events: auto; }
+    @media (prefers-reduced-motion: reduce) { #map-zoom { transition: none; } }
     #zoom-btn {
-      position: absolute; bottom: 24px; left: 16px; z-index: 900;
+      flex-shrink: 0;
       width: 44px; height: 44px; border-radius: 50%;
-      border: 1px solid #0f3460; background: rgba(22, 33, 62, 0.88);
+      /* Same look as the search field, same shadow as the submit button */
+      border: none; background: rgba(22, 33, 62, 0.92);
       color: #eee; display: none; align-items: center; justify-content: center;
-      cursor: pointer; backdrop-filter: blur(6px);
+      cursor: pointer;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.4);
     }
     #zoom-btn.shown { display: flex; }
-    #zoom-btn.on { background: #70a1ff; border-color: #a8c8ff; color: #fff; }
-    @media (max-width: 440px) { #zoom-btn { bottom: 84px; } }
+    #zoom-btn { transition: background 0.2s, transform 0.1s; }
+    #zoom-btn:hover { background: rgba(32, 48, 90, 0.97); }
+    #zoom-btn.on:hover { background: #5b8ef0; }
+    #zoom-btn:active { transform: scale(0.93); }
+    #zoom-btn.on { background: #70a1ff; color: #fff; }
+    /* Zoomed: drop the vertical bar so the magnifier shows a minus */
+    #zoom-btn.on .zoom-plus-v { display: none; }
     .leaflet-interactive { transition: r 0.15s ease, d 0.15s ease; }
 
     /* ── Bottom bar ── */
@@ -470,17 +480,16 @@
   </div>
 </div>
 
-<button id="zoom-btn" title="Zoom" aria-label="Zoom">
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
-</button>
-
 <!-- KM result display -->
 <div id="km-display"></div>
 
 <!-- Bottom bar: search or action button -->
 <div id="bottom-bar">
+  <button id="zoom-btn" title="Zoom" aria-label="Zoom">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/><line class="zoom-plus-v" x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+  </button>
   <div id="search-wrapper">
-    <input id="search-input" type="text" placeholder="Trouve une ville proche…" autocomplete="off" spellcheck="false" />
+    <input id="search-input" type="text" placeholder="Quelle ville proche ?" autocomplete="off" spellcheck="false" />
     <div id="suggestions" style="display:none"></div>
   </div>
   <button id="submit-btn" title="Valider"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
@@ -638,8 +647,6 @@
     const base = Math.max(0, window.innerHeight - (vv.offsetTop + vv.height));
     document.getElementById('bottom-bar').style.bottom = (24 + base) + 'px';
     document.getElementById('km-display').style.bottom = (92 + base) + 'px';
-    const narrow = window.innerWidth <= 440;
-    document.getElementById('zoom-btn').style.bottom = ((narrow ? 84 : 24) + base) + 'px';
   }
 
   if (window.visualViewport) {
@@ -725,9 +732,18 @@
     centerZoomMap();
   }
 
-  function setZoomed(on) {
+  function setZoomed(on, instant) {
     zoomed = on;
-    document.getElementById('map-zoom').classList.toggle('active', on);
+    const el = document.getElementById('map-zoom');
+    if (instant) {
+      // Skip the fade (e.g. new round): disable the transition, apply, then re-enable
+      el.classList.add('instant');
+      el.classList.toggle('active', on);
+      void el.offsetWidth;
+      el.classList.remove('instant');
+    } else {
+      el.classList.toggle('active', on);
+    }
     document.getElementById('zoom-btn').classList.toggle('on', on);
   }
 
@@ -1020,7 +1036,10 @@
     setTimeout(() => { suppressResize = false; }, 0);
   });
 
-  function startRound() {
+  // unzoomDelayMs > 0: we were zoomed, so fade back to the normal map and hold the new target's
+  // appearance (and the zoom map re-aim) until that fade has finished
+  let pendingSpawn = { id: 0, run: null }; // delayed target spawn, so a fast guess can force it
+  function startRound(unzoomDelayMs = 0) {
     guessedThisRound = false;
     actionBtnReady = false;
     hideKmDisplay();
@@ -1036,20 +1055,27 @@
     const target = targets[round];
     const [tLng, tLat] = target.centre.coordinates;
 
-    // Zoom map: reset to normal view for the new round, re-aim at the new target, enable the button
-    setZoomed(false);
-    setZoomTarget([tLat, tLng]);
+    // Zoom map: reset to normal view for the new round (no fade), re-aim at the new target, enable the button
+    setZoomed(false, !unzoomDelayMs);
+    if (unzoomDelayMs) setTimeout(() => setZoomTarget([tLat, tLng]), unzoomDelayMs);
+    else setZoomTarget([tLat, tLng]);
     document.getElementById('zoom-btn').classList.add('shown');
 
     // Show target marker — label hidden until after guess
     const spawnTarget = () => {
+      clearTimeout(pendingSpawn.id);
+      pendingSpawn = { id: 0, run: null };
       targetMarker = makeMarker([tLat, tLng], COLOR_TARGET, target.nom, false);
       targetMarker._labelLocked = true; // prevent hover reveal before guess
       roundLayers.push(targetMarker);
       if (targetMarker._labelMarker) roundLayers.push(targetMarker._labelMarker);
       popMarker(targetMarker);
     };
-    if (round === 0) setTimeout(spawnTarget, 350); else spawnTarget();
+    const spawnDelay = round === 0 ? 350 : unzoomDelayMs;
+    clearTimeout(pendingSpawn.id);
+    pendingSpawn = { id: 0, run: null };
+    if (spawnDelay) pendingSpawn = { id: setTimeout(spawnTarget, spawnDelay), run: spawnTarget };
+    else spawnTarget();
 
     // Show score panel with current round label
     document.getElementById('score-panel').classList.add('visible');
@@ -1067,7 +1093,10 @@
   function onGuess(city) {
     if (guessedThisRound) return;
     guessedThisRound = true;
+    if (pendingSpawn.run) pendingSpawn.run(); // guess came before the target dot appeared
     hideSuggestions();
+    // Zoom button goes away with the search bar; it comes back with "Suivant" (showActionBtn)
+    document.getElementById('zoom-btn').classList.remove('shown');
 
     const target = targets[round];
     const [tLng, tLat] = target.centre.coordinates;
@@ -1146,6 +1175,7 @@
     document.getElementById('submit-btn').style.display = 'none';
     const btn = document.getElementById('action-btn');
     btn.style.display = 'block';
+    if (zoomMirror) document.getElementById('zoom-btn').classList.add('shown');
     btn.textContent = round < TOTAL_ROUNDS - 1 ? 'Suivant →' : 'Résultats';
     actionBtnReady = false;
     setTimeout(() => { actionBtnReady = true; }, 300);
@@ -1219,7 +1249,8 @@
     round++;
     if (round < TOTAL_ROUNDS) {
       trackEvent('next_' + round);
-      startRound();
+      // If zoomed, startRound unzooms with the fade and delays the new city's appearance
+      startRound(zoomed ? 300 + 150 : 0);
       saveState('playing');
     } else {
       trackEvent('result');
@@ -1237,7 +1268,7 @@
 
   function showResults() {
     resultsShown = true;
-    setZoomed(false);
+    setZoomed(false, true);
     document.getElementById('zoom-btn').classList.remove('shown');
     zoomMirror = false;
     clearZoomRoundLayers();
@@ -1438,7 +1469,13 @@
         const target = targets[i];
         const city = cityByCode.get(sg.cityCode);
         if (!target || !city) return;
-        guesses.push({ target, city, dist: sg.dist });
+        const [tLng, tLat] = target.centre.coordinates;
+        const landmarks = LANDMARKS
+          .map(([lat, lng, name]) => ({ lat, lng, name, d: haversineKm(lat, lng, tLat, tLng) }))
+          .filter(lm => lm.d < sg.dist)
+          .sort((a, b) => a.d - b.d)
+          .slice(0, 2);
+        guesses.push({ target, city, dist: sg.dist, landmarks });
       });
       // Draw only the last round's markers into roundLayers so startRound() can clear them
       const lastSg = save.guesses[save.guesses.length - 1];
@@ -1447,12 +1484,28 @@
       if (lastTarget && lastCity) {
         const [tLng, tLat] = lastTarget.centre.coordinates;
         const [gLng, gLat] = lastCity.centre.coordinates;
+        // Mirror onto the zoom map too so the zoom button works after a reload
+        zoomMirror = true;
+        setZoomTarget([tLat, tLng]);
         const tm = makeMarker([tLat, tLng], COLOR_TARGET, lastTarget.nom, false, 'dotsTarget');
         const gm = makeMarker([gLat, gLng], guessColor(lastSg.dist), lastCity.nom, true, 'dotsGuess');
-        const line = L.polyline([[tLat, tLng], [gLat, gLng]], { color:'#fff', weight:2, opacity:0.75, dashArray:'3 6', pane:'lines' }).addTo(map);
+        const lineOpts = { color:'#fff', weight:2, opacity:0.75, dashArray:'3 6', pane:'lines' };
+        const line = L.polyline([[tLat, tLng], [gLat, gLng]], lineOpts).addTo(map);
+        zoomRoundLayers.push(L.polyline([[tLat, tLng], [gLat, gLng]], lineOpts).addTo(zoomMap));
         roundLayers.push(tm, gm, line);
         if (tm._labelMarker) roundLayers.push(tm._labelMarker);
         if (gm._labelMarker) roundLayers.push(gm._labelMarker);
+
+        // Landmarks closer to the target than the guess, on both maps (as drawn live in onGuess)
+        const lmOpts = { color:'#fff', weight:1.5, opacity:0.75, dashArray:'3 6', pane:'lines' };
+        const lastLandmarks = guesses[guesses.length - 1] ? guesses[guesses.length - 1].landmarks : [];
+        lastLandmarks.forEach(lm => {
+          roundLayers.push(L.polyline([[tLat, tLng], [lm.lat, lm.lng]], lmOpts).addTo(map));
+          zoomRoundLayers.push(L.polyline([[tLat, tLng], [lm.lat, lm.lng]], lmOpts).addTo(zoomMap));
+          const lmMarker = makeSuggestedMarker([lm.lat, lm.lng], guessColor(lm.d), lm.name);
+          roundLayers.push(lmMarker);
+          if (lmMarker._labelMarker) roundLayers.push(lmMarker._labelMarker);
+        });
       }
       round = save.guesses.length - 1;
       guessedThisRound = true;
