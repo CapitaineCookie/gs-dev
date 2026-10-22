@@ -79,6 +79,10 @@
     #zoom-btn.on { background: #70a1ff; color: #fff; }
     /* Zoomed: drop the vertical bar so the magnifier shows a minus */
     #zoom-btn.on .zoom-plus-v { display: none; }
+    /* Waiting for the zoom map's tiles: swap the magnifier for a spinner */
+    #zoom-btn .zoom-spinner { display: none; animation: spin 1s linear infinite; }
+    #zoom-btn.loading .zoom-spinner { display: block; }
+    #zoom-btn.loading .zoom-icon { display: none; }
     .leaflet-interactive { transition: r 0.15s ease, d 0.15s ease; }
 
     /* ── Bottom bar ── */
@@ -486,7 +490,11 @@
 <!-- Bottom bar: search or action button -->
 <div id="bottom-bar">
   <button id="zoom-btn" title="Zoom" aria-label="Zoom">
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/><line class="zoom-plus-v" x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+    <svg class="zoom-spinner" width="20" height="20" viewBox="0 0 28 28" fill="none">
+      <circle cx="14" cy="14" r="11" stroke="#ffffff44" stroke-width="3"/>
+      <path d="M14 3 A11 11 0 0 1 25 14" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+    </svg>
+    <svg class="zoom-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/><line class="zoom-plus-v" x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
   </button>
   <div id="search-wrapper">
     <input id="search-input" type="text" placeholder="Quelle ville proche ?" autocomplete="off" spellcheck="false" />
@@ -682,11 +690,21 @@
       cover.addEventListener('transitionend', () => cover.remove(), { once: true });
     }
     if (!tryLoadSharedFragment() && !restoreSession()) {
-      const btn = document.getElementById('play-btn');
-      btn.disabled = false;
-      btn.innerHTML = 'Jouer';
+      // Enable "Jouer" once the zoom map's tiles are loaded too (or after a 5 s cap)
+      playPending = true;
+      maybeEnablePlay();
+      setTimeout(() => maybeEnablePlay(true), 5000);
     }
   }).addTo(map);
+
+  let playPending = false;
+  function maybeEnablePlay(force) {
+    if (!playPending || (!force && !zoomTilesReady)) return;
+    playPending = false;
+    const btn = document.getElementById('play-btn');
+    btn.disabled = false;
+    btn.innerHTML = 'Jouer';
+  }
 
   // ── Zoom map: second map loaded alongside the main one, toggled by #zoom-btn ──
   const ZOOM_LEVEL = 8;
@@ -698,9 +716,12 @@
     touchZoom: false, boxZoom: false, keyboard: false,
     attributionControl: false,
   });
+  let zoomTilesReady = false;
   L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
     maxZoom: 19, detectRetina: true, keepBuffer: 1,
-  }).addTo(zoomMap);
+  }).on('loading', () => { zoomTilesReady = false; })
+    .on('load', () => { zoomTilesReady = true; maybeEnablePlay(); revealZoomMap(); })
+    .addTo(zoomMap);
 
   let zoomTargetLatLng = null;
   let zoomed = false;
@@ -732,19 +753,41 @@
     centerZoomMap();
   }
 
+  // Zooming in before the zoom map's tiles are loaded: keep the normal map visible, show a spinner
+  // on the button, and fade the zoom map in once its tiles arrive (or after a 1.5 s cap).
+  let zoomWaiting = false;
+  let zoomWaitToken = 0;
+  function revealZoomMap() {
+    if (!zoomWaiting) return;
+    zoomWaiting = false;
+    zoomWaitToken++;
+    document.getElementById('zoom-btn').classList.remove('loading');
+    document.getElementById('map-zoom').classList.add('active');
+  }
+
   function setZoomed(on, instant) {
     zoomed = on;
     const el = document.getElementById('map-zoom');
+    const btn = document.getElementById('zoom-btn');
+    // Cancel any pending reveal
+    zoomWaiting = false;
+    zoomWaitToken++;
+    btn.classList.remove('loading');
     if (instant) {
       // Skip the fade (e.g. new round): disable the transition, apply, then re-enable
       el.classList.add('instant');
       el.classList.toggle('active', on);
       void el.offsetWidth;
       el.classList.remove('instant');
+    } else if (on && !zoomTilesReady) {
+      zoomWaiting = true;
+      btn.classList.add('loading');
+      const token = zoomWaitToken;
+      setTimeout(() => { if (token === zoomWaitToken) revealZoomMap(); }, 1500);
     } else {
       el.classList.toggle('active', on);
     }
-    document.getElementById('zoom-btn').classList.toggle('on', on);
+    btn.classList.toggle('on', on);
   }
 
   document.getElementById('zoom-btn').addEventListener('click', () => setZoomed(!zoomed));
@@ -852,6 +895,12 @@
 
   function pickTargets() {
     return pickTargetsForDay(Math.floor((today - EPOCH) / 86400000));
+  }
+
+  // Aim the zoom map at round 1's target now, so its tiles load while the intro is showing
+  {
+    const [lng, lat] = pickTargets()[0].centre.coordinates;
+    setZoomTarget([lat, lng]);
   }
 
   function lighten(hex, amount = 0.45) {
