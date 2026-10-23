@@ -73,8 +73,11 @@
     }
     #zoom-btn.shown { display: flex; }
     #zoom-btn { transition: background 0.2s, transform 0.1s; }
-    #zoom-btn:hover { background: rgba(32, 48, 90, 0.97); }
-    #zoom-btn.on:hover { background: #5b8ef0; }
+    /* Hover only where a real pointer exists, so it doesn't stick after a tap on touch screens */
+    @media (hover: hover) {
+      #zoom-btn:hover { background: rgba(32, 48, 90, 0.97); }
+      #zoom-btn.on:hover { background: #5b8ef0; }
+    }
     #zoom-btn:active { transform: scale(0.93); }
     #zoom-btn.on { background: #70a1ff; color: #fff; }
     /* Zoomed: drop the vertical bar so the magnifier shows a minus */
@@ -122,6 +125,9 @@
       gap: 8px;
     }
 
+    /* No browser tap-highlight box on touch screens; the buttons have their own :active feedback */
+    #bottom-bar button { -webkit-tap-highlight-color: transparent; }
+
     #search-wrapper { position: relative; flex: 1; min-width: 0; }
 
     #search-input {
@@ -154,7 +160,9 @@
       transition: background 0.2s, transform 0.1s;
       display: flex; align-items: center; justify-content: center;
     }
-    #submit-btn:hover { background: #c73652; }
+    @media (hover: hover) {
+      #submit-btn:hover { background: #c73652; }
+    }
     #submit-btn:active { transform: scale(0.93); }
 
     #suggestions {
@@ -1003,7 +1011,18 @@
       const lat = p1[0] + (p2[0] - p1[0]) * t;
       const lng = p1[1] + (p2[1] - p1[1]) * t;
       line.setLatLngs([p1, [lat, lng]]);
-      if (zLine) zLine.setLatLngs([p1, [lat, lng]]);
+      if (zLine) {
+        zLine.setLatLngs([p1, [lat, lng]]);
+        // Zoomed in and the line tip is leaving the zoom view: pull back to the normal map (once per round)
+        if (zoomed && !autoUnzoomed) {
+          const pt = zoomMap.latLngToContainerPoint([lat, lng]);
+          const size = zoomMap.getSize(), m = 30;
+          if (pt.x < m || pt.y < m || pt.x > size.x - m || pt.y > size.y - m) {
+            autoUnzoomed = true;
+            setZoomed(false);
+          }
+        }
+      }
       if (raw < 1) {
         requestAnimationFrame(tick);
       } else {
@@ -1087,9 +1106,11 @@
 
   // unzoomDelayMs > 0: we were zoomed, so fade back to the normal map and hold the new target's
   // appearance (and the zoom map re-aim) until that fade has finished
+  let autoUnzoomed = false; // the result animation already pulled back to the normal map this round
   let pendingSpawn = { id: 0, run: null }; // delayed target spawn, so a fast guess can force it
   function startRound(unzoomDelayMs = 0) {
     guessedThisRound = false;
+    autoUnzoomed = false;
     actionBtnReady = false;
     hideKmDisplay();
     roundLayers.forEach(l => map.removeLayer(l));
